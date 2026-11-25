@@ -1046,8 +1046,87 @@
     }catch(e){try{console.warn('Resumo dos lotes',e);}catch(_){}return null;}
   };
 
+  /* ---------- Acessos: criar utilizadores com palavra-passe e acesso completo ---------- */
+  var FULL={profile:'manager',
+    view:['overview','batches','production','generalExpenses','expenses','sales','customers','collections','investments','cash','documents','reports'],
+    create:['production','expenses','generalExpenses','sales','collections','documents'],
+    edit:['batches','production','expenses','generalExpenses','sales','collections','customers','investments'],
+    delete:['batches','production','expenses','generalExpenses','sales','collections','customers','investments']};
+  var acc={members:null,loading:false,msg:null,draft:null};
+  function api(path,body){
+    var t=token();if(!t)return Promise.reject(new Error('A sessão terminou. Volta a entrar.'));
+    var o={headers:{Authorization:'Bearer '+t,apikey:KEY},credentials:'omit',cache:'no-store'};
+    if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+    return fetch(API+path,o).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Não foi possível concluir.');return j;});});
+  }
+  function usersApi(body){
+    var t=token();if(!t)return Promise.reject(new Error('A sessão terminou. Volta a entrar.'));
+    return fetch(API.replace(/aviario-web$/,'aviario-users'),{method:'POST',headers:{Authorization:'Bearer '+t,apikey:KEY,'Content-Type':'application/json'},credentials:'omit',cache:'no-store',body:JSON.stringify(body)})
+      .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Não foi possível concluir.');return j;});});
+  }
+  function accMembers(){
+    if(acc.loading)return;acc.loading=true;
+    api('/access').then(function(j){acc.members=j.members||[];acc.loading=false;accessUi(true);}).catch(function(e){acc.loading=false;acc.members=[];acc.msg={text:e.message,bad:true};accessUi(true);});
+  }
+  function pwOk(a,b){if(a.length<8)return 'A palavra-passe tem de ter pelo menos 8 caracteres.';if(a!==b)return 'As duas palavras-passe não são iguais.';return '';}
+  function accessCss(){if(document.getElementById('fx-login-css'))return;var st=document.createElement('style');st.id='fx-login-css';st.textContent='.fx-login-panel{display:grid;gap:14px}.fx-login-panel .fxi-form{margin:0}.fx-login-panel .fxi-form>p.fxi-muted{margin:0 0 12px;line-height:1.45}'+'.fx-login-panel .fxi-primary{background:#075b43;color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;opacity:1;cursor:pointer}.fx-login-panel .fxi-primary:disabled{opacity:.6;cursor:wait}'+'.fx-login-panel .fxi-fields .fxi-check{flex-direction:row;align-items:center;gap:8px;padding-top:24px;font-weight:600}.fx-login-panel .fxi-check input{width:16px;height:16px;min-height:0;margin:0;flex:none}';document.head.appendChild(st);}
+  function accessUi(force){
+    accessCss();
+    var lay=document.querySelector('main .access-layout');if(!lay)return;
+    var box=lay.querySelector('.fx-login-panel');
+    if(box&&!force)return;
+    if(!acc.members){if(!box){box=document.createElement('section');box.className='fx-login-panel';var intro=lay.querySelector('.access-intro');lay.insertBefore(box,intro?intro.nextSibling:lay.firstChild);box.innerHTML='<p class="fxi-muted">A carregar os utilizadores…</p>';}accMembers();return;}
+    if(!box){box=document.createElement('section');box.className='fx-login-panel';var intro2=lay.querySelector('.access-intro');lay.insertBefore(box,intro2?intro2.nextSibling:lay.firstChild);}
+    var list=acc.members.filter(function(m){return m.enabled;});
+    var m=acc.msg;acc.msg=null;
+    box.innerHTML=(m?'<div class="fxi-flash'+(m.bad?' bad':'')+'">'+esc(m.text)+(m.bad?'':' <button type="button" class="fxi-link" data-fx-reload>Actualizar a lista abaixo</button>')+'</div>':'')+
+      '<form class="fxi-form" id="fx-new-user"><h3>Criar utilizador com acesso completo</h3>'+
+      '<p class="fxi-muted">A pessoa entra logo com o email e a palavra-passe que definir aqui, sem convite por email. Fica com acesso a todas as páginas e pode registar, editar e apagar. Só o administrador gere utilizadores, fecha dias e dá dívidas como perdidas.</p>'+
+      '<div class="fxi-fields">'+
+      '<label>Nome<input type="text" name="name" required maxlength="100" autocomplete="off"></label>'+
+      '<label>Email<input type="email" name="email" required maxlength="254" autocomplete="off"></label>'+
+      '<label>Palavra-passe<input type="password" name="pw" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
+      '<label>Repetir palavra-passe<input type="password" name="pw2" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
+      '<label class="fxi-check"><input type="checkbox" name="show"> Mostrar palavra-passe</label>'+
+      '</div><div class="fxi-form-actions"><button type="submit" class="fxi-primary">Criar utilizador</button><span class="fxi-muted">Envie a palavra-passe à pessoa por um meio seguro.</span></div></form>'+
+      (list.length?'<form class="fxi-form" id="fx-set-pw"><h3>Definir ou mudar a palavra-passe de um utilizador</h3><div class="fxi-fields">'+
+      '<label>Utilizador<select name="id" required><option value="">Escolha o utilizador</option>'+list.map(function(x){return '<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(x.email)+(x.hasJoined?'':' (ainda não entrou)')+'</option>';}).join('')+'</select></label>'+
+      '<label>Nova palavra-passe<input type="password" name="pw" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
+      '<label>Repetir palavra-passe<input type="password" name="pw2" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
+      '<label class="fxi-check"><input type="checkbox" name="full"> Dar também acesso completo</label>'+
+      '</div><div class="fxi-form-actions"><button type="submit" class="fxi-primary">Guardar palavra-passe</button></div></form>':'');
+    var rl=box.querySelector('[data-fx-reload]');if(rl)rl.addEventListener('click',function(){location.reload();});
+    var f=box.querySelector('#fx-new-user');
+    if(acc.draft){fld(f,'name').value=acc.draft.name;fld(f,'email').value=acc.draft.email;acc.draft=null;}
+    f.querySelector('[name=show]').addEventListener('change',function(e){f.querySelectorAll('[type=password],[data-pw]').forEach(function(i){i.type=e.target.checked?'text':'password';i.setAttribute('data-pw','1');});});
+    f.addEventListener('submit',function(e){e.preventDefault();
+      var name=val(f,'name'),email=val(f,'email').toLowerCase(),pw=fld(f,'pw').value,err=pwOk(pw,fld(f,'pw2').value);
+      if(err){acc.msg={text:err,bad:true};acc.draft={name:name,email:email};accessUi(true);return;}
+      var bt=f.querySelector('button[type=submit]');bt.disabled=true;bt.textContent='A criar…';
+      var existing=acc.members.find(function(x){return x.email.toLowerCase()===email;});
+      var step=existing?Promise.resolve({members:acc.members}):api('/access',{name:name,email:email,enabled:true,permissions:FULL});
+      step.then(function(j){var mm=(j.members||[]).find(function(x){return x.email.toLowerCase()===email;});if(!mm)throw new Error('Não foi possível criar o utilizador.');
+        if(existing&&!existing.enabled)throw new Error('Este email já existe mas está suspenso. Reactive-o na lista abaixo.');
+        return usersApi({id:mm.id,password:pw});})
+      .then(function(){acc.msg={text:'Utilizador '+name+' criado. Já pode entrar com '+email+' e a palavra-passe definida.'};acc.members=null;accessUi(true);})
+      .catch(function(er){acc.msg={text:er.message,bad:true};acc.draft={name:name,email:email};acc.members=null;accessUi(true);});
+    });
+    var g=box.querySelector('#fx-set-pw');
+    if(g)g.addEventListener('submit',function(e){e.preventDefault();
+      var id=val(g,'id'),pw=fld(g,'pw').value,err=pwOk(pw,fld(g,'pw2').value),full=fld(g,'full').checked;
+      var mm=acc.members.find(function(x){return x.id===id;});
+      if(!mm){acc.msg={text:'Escolha o utilizador.',bad:true};accessUi(true);return;}
+      if(err){acc.msg={text:err,bad:true};accessUi(true);return;}
+      var bt=g.querySelector('button[type=submit]');bt.disabled=true;bt.textContent='A guardar…';
+      var step=full?api('/access',{id:mm.id,revision:mm.revision,name:mm.name,email:mm.email,enabled:true,permissions:FULL}):Promise.resolve();
+      step.then(function(){return usersApi({id:mm.id,password:pw});})
+      .then(function(){acc.msg={text:'Palavra-passe de '+mm.name+' guardada'+(full?' e acesso completo dado':'')+'.'};acc.members=null;accessUi(true);})
+      .catch(function(er){acc.msg={text:er.message,bad:true};acc.members=null;accessUi(true);});
+    });
+  }
+
   var q=false;
-  function tick(){q=false;mount();try{cobranca();}catch(e){}try{closeUi();}catch(e){}try{printUi();}catch(e){}}
+  function tick(){q=false;mount();try{cobranca();}catch(e){}try{closeUi();}catch(e){}try{printUi();}catch(e){}try{accessUi();}catch(e){}}
   function start(){
     new MutationObserver(function(){if(!q){q=true;requestAnimationFrame(tick);}}).observe(document.body,{childList:true,subtree:true});
     mount();
