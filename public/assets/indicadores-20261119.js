@@ -1046,13 +1046,8 @@
     }catch(e){try{console.warn('Resumo dos lotes',e);}catch(_){}return null;}
   };
 
-  /* ---------- Acessos: criar utilizadores com palavra-passe e acesso completo ---------- */
-  var FULL={profile:'manager',
-    view:['overview','batches','production','generalExpenses','expenses','sales','customers','collections','investments','cash','documents','reports'],
-    create:['production','expenses','generalExpenses','sales','collections','documents'],
-    edit:['batches','production','expenses','generalExpenses','sales','collections','customers','investments'],
-    delete:['batches','production','expenses','generalExpenses','sales','collections','customers','investments']};
-  var acc={members:null,loading:false,msg:null,draft:null};
+  /* ---------- Acessos: palavra-passe no «Preparar acesso de colaborador» e mudança de palavra-passe ---------- */
+  var acc={members:null,loading:false,msg:null,pending:null,pw:'',pw2:''};
   function api(path,body){
     var t=token();if(!t)return Promise.reject(new Error('A sessão terminou. Volta a entrar.'));
     var o={headers:{Authorization:'Bearer '+t,apikey:KEY},credentials:'omit',cache:'no-store'};
@@ -1068,59 +1063,97 @@
     if(acc.loading)return;acc.loading=true;
     api('/access').then(function(j){acc.members=j.members||[];acc.loading=false;accessUi(true);}).catch(function(e){acc.loading=false;acc.members=[];acc.msg={text:e.message,bad:true};accessUi(true);});
   }
-  function pwOk(a,b){if(a.length<8)return 'A palavra-passe tem de ter pelo menos 8 caracteres.';if(a!==b)return 'As duas palavras-passe não são iguais.';return '';}
-  function accessCss(){if(document.getElementById('fx-login-css'))return;var st=document.createElement('style');st.id='fx-login-css';st.textContent='.fx-login-panel{display:grid;gap:14px}.fx-login-panel .fxi-form{margin:0}.fx-login-panel .fxi-form>p.fxi-muted{margin:0 0 12px;line-height:1.45}'+'.fx-login-panel .fxi-primary{background:#075b43;color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;opacity:1;cursor:pointer}.fx-login-panel .fxi-primary:disabled{opacity:.6;cursor:wait}'+'.fx-login-panel .fxi-fields .fxi-check{flex-direction:row;align-items:center;gap:8px;padding-top:24px;font-weight:600}.fx-login-panel .fxi-check input{width:16px;height:16px;min-height:0;margin:0;flex:none}';document.head.appendChild(st);}
+  function pwOk(a,b){if(a.length<8)return 'A palavra-passe tem de ter pelo menos 8 caracteres.';if(a.length>72)return 'A palavra-passe tem no máximo 72 caracteres.';if(a!==b)return 'As duas palavras-passe não são iguais.';return '';}
+  function accessCss(){if(document.getElementById('fx-login-css'))return;var st=document.createElement('style');st.id='fx-login-css';st.textContent=
+    '.fx-login-panel{display:grid;gap:14px}.fx-login-panel .fxi-form{margin:0}.fx-login-panel .fxi-form>p.fxi-muted{margin:0 0 12px;line-height:1.45}'+
+    '.fx-login-panel .fxi-primary{background:#075b43;color:#fff;border:0;border-radius:10px;padding:10px 16px;font-weight:700;opacity:1;cursor:pointer}.fx-login-panel .fxi-primary:disabled{opacity:.6;cursor:wait}'+
+    '.fx-pw-block{border:1px dashed #b9cdbf;border-radius:12px;padding:12px 14px;margin:14px 18px;background:#f7faf8}.fx-pw-block h4{margin:0 0 4px;font-size:13px}.fx-pw-block p{margin:0 0 10px;font-size:12px;color:#58796a;line-height:1.4}'+
+    '.fx-pw-block .fx-pw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:10px 14px}.fx-pw-block label{display:flex;flex-direction:column;gap:6px;font-size:11.5px;font-weight:600;color:#4d6457}'+
+    '.fx-pw-block .fx-pw-msg{margin-top:8px}.fx-pw-block .fx-pw-show{flex-direction:row;align-items:center;gap:8px;padding-top:22px}.fx-pw-block .fx-pw-show input{width:16px;height:16px;margin:0;flex:none}';
+    document.head.appendChild(st);}
+  // Depois de o «Guardar permissões» da app gravar o acesso, define a palavra-passe desse colaborador.
+  (function(){
+    if(window.__fxAccFetch)return;window.__fxAccFetch=true;
+    var orig=window.fetch;
+    window.fetch=function(input,init){
+      var p=orig.apply(this,arguments);
+      try{
+        var url=typeof input==='string'?input:(input&&input.url)||'',method=(init&&init.method)||(input&&input.method)||'GET';
+        if(acc.pending&&method==='POST'&&/\/aviario-web\/access$/.test(url.split('?')[0])){
+          var pend=acc.pending;acc.pending=null;
+          p.then(function(r){if(!r.ok)return;return r.clone().json().then(function(j){
+            var m=(j.members||[]).find(function(x){return String(x.email).toLowerCase()===pend.email;});
+            if(!m)throw new Error('Acesso guardado, mas não encontrei o colaborador para definir a palavra-passe.');
+            if(!m.enabled)throw new Error('Acesso guardado, mas o colaborador está suspenso: a palavra-passe não foi definida.');
+            return usersApi({id:m.id,password:pend.pw}).then(function(){acc.pw=acc.pw2='';pwMsg({text:'Palavra-passe definida: '+m.name+' já pode entrar com '+m.email+'.'});acc.members=null;accessUi(true);});
+          });}).catch(function(e){pwMsg({text:e.message,bad:true});});
+        }
+      }catch(e){}
+      return p;
+    };
+  })();
+  var pwLast=null;
+  function pwMsg(m){pwLast=m;var el=document.querySelector('.fx-pw-block .fx-pw-msg');if(el)el.innerHTML='<div class="fxi-flash'+(m.bad?' bad':'')+'">'+esc(m.text)+'</div>';var b=document.querySelector('.fx-pw-block');if(b){b.querySelectorAll('input[type=password],input[data-pw]').forEach(function(i){if(!m.bad)i.value='';});}}
+  function accessFormPw(){
+    var sec=document.getElementById('access-form');if(!sec)return;
+    var emailIn=sec.querySelector('input[type=email]');if(!emailIn)return;
+    var blk=sec.querySelector('.fx-pw-block');
+    if(!blk){
+      var anchor=emailIn.closest('label');var grid=anchor&&anchor.parentNode;if(!grid)return;
+      blk=document.createElement('div');blk.className='fx-pw-block';
+      blk.innerHTML='<h4>Palavra-passe de entrada (opcional)</h4><p>Se preencher, a pessoa entra logo com este email e esta palavra-passe, sem convite por email. A categoria e as páginas são as que escolher abaixo. Para um colaborador já existente, muda a palavra-passe.</p>'+
+        '<div class="fx-pw-grid"><label>Palavra-passe<input type="password" data-fx="pw" maxlength="72" autocomplete="new-password"></label>'+
+        '<label>Repetir palavra-passe<input type="password" data-fx="pw2" maxlength="72" autocomplete="new-password"></label>'+
+        '<label class="fx-pw-show"><input type="checkbox" data-fx="show"> Mostrar</label></div><div class="fx-pw-msg"></div>';
+      grid.parentNode.insertBefore(blk,grid.nextSibling);
+      var a=blk.querySelector('[data-fx=pw]'),b=blk.querySelector('[data-fx=pw2]');
+      a.value=acc.pw;b.value=acc.pw2;
+      a.addEventListener('input',function(){acc.pw=a.value;});b.addEventListener('input',function(){acc.pw2=b.value;});
+      blk.querySelector('[data-fx=show]').addEventListener('change',function(e){[a,b].forEach(function(i){i.type=e.target.checked?'text':'password';});});
+      if(pwLast)pwMsg(pwLast);
+    }
+    var form=sec.tagName==='FORM'?sec:sec.querySelector('form')||sec;
+    if(!form.__fxPw){form.__fxPw=true;
+      var check=function(e){
+        if(e.type==='click'){var t=e.target.closest('button');if(!t||t.type!=='submit')return;}
+        var pw=acc.pw||'',pw2=acc.pw2||'';
+        if(!pw&&!pw2){acc.pending=null;return;}
+        var err=pwOk(pw,pw2);
+        if(err){e.preventDefault();e.stopPropagation();pwMsg({text:err,bad:true});return;}
+        acc.pending={email:String(emailIn.value||'').trim().toLowerCase(),pw:pw};pwLast=null;
+        var el=sec.querySelector('.fx-pw-block .fx-pw-msg');if(el)el.innerHTML='';
+      };
+      form.addEventListener('submit',check,true);
+      if(form===sec)sec.addEventListener('click',check,true);
+    }
+  }
   function accessUi(force){
-    accessCss();
     var lay=document.querySelector('main .access-layout');if(!lay)return;
+    accessCss();
+    try{accessFormPw();}catch(e){}
     var box=lay.querySelector('.fx-login-panel');
     if(box&&!force)return;
-    if(!acc.members){if(!box){box=document.createElement('section');box.className='fx-login-panel';var intro=lay.querySelector('.access-intro');lay.insertBefore(box,intro?intro.nextSibling:lay.firstChild);box.innerHTML='<p class="fxi-muted">A carregar os utilizadores…</p>';}accMembers();return;}
-    if(!box){box=document.createElement('section');box.className='fx-login-panel';var intro2=lay.querySelector('.access-intro');lay.insertBefore(box,intro2?intro2.nextSibling:lay.firstChild);}
+    if(!box){box=document.createElement('section');box.className='fx-login-panel';var intro=lay.querySelector('.access-intro');lay.insertBefore(box,intro?intro.nextSibling:lay.firstChild);}
+    if(!acc.members){box.innerHTML='<p class="fxi-muted">A carregar os utilizadores…</p>';accMembers();return;}
     var list=acc.members.filter(function(m){return m.enabled;});
     var m=acc.msg;acc.msg=null;
     box.innerHTML=(m?'<div class="fxi-flash'+(m.bad?' bad':'')+'">'+esc(m.text)+(m.bad?'':' <button type="button" class="fxi-link" data-fx-reload>Actualizar a lista abaixo</button>')+'</div>':'')+
-      '<form class="fxi-form" id="fx-new-user"><h3>Criar utilizador com acesso completo</h3>'+
-      '<p class="fxi-muted">A pessoa entra logo com o email e a palavra-passe que definir aqui, sem convite por email. Fica com acesso a todas as páginas e pode registar, editar e apagar. Só o administrador gere utilizadores, fecha dias e dá dívidas como perdidas.</p>'+
-      '<div class="fxi-fields">'+
-      '<label>Nome<input type="text" name="name" required maxlength="100" autocomplete="off"></label>'+
-      '<label>Email<input type="email" name="email" required maxlength="254" autocomplete="off"></label>'+
-      '<label>Palavra-passe<input type="password" name="pw" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
-      '<label>Repetir palavra-passe<input type="password" name="pw2" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
-      '<label class="fxi-check"><input type="checkbox" name="show"> Mostrar palavra-passe</label>'+
-      '</div><div class="fxi-form-actions"><button type="submit" class="fxi-primary">Criar utilizador</button><span class="fxi-muted">Envie a palavra-passe à pessoa por um meio seguro.</span></div></form>'+
-      (list.length?'<form class="fxi-form" id="fx-set-pw"><h3>Definir ou mudar a palavra-passe de um utilizador</h3><div class="fxi-fields">'+
-      '<label>Utilizador<select name="id" required><option value="">Escolha o utilizador</option>'+list.map(function(x){return '<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(x.email)+(x.hasJoined?'':' (ainda não entrou)')+'</option>';}).join('')+'</select></label>'+
+      (list.length?'<form class="fxi-form" id="fx-set-pw"><h3>Definir ou mudar a palavra-passe de um colaborador</h3>'+
+      '<p class="fxi-muted">Para colaboradores já criados (por exemplo, convidados que nunca entraram). Para criar um novo, use «Preparar acesso de colaborador» abaixo: escolha a categoria e as páginas e preencha a palavra-passe.</p><div class="fxi-fields">'+
+      '<label>Colaborador<select name="id" required><option value="">Escolha o colaborador</option>'+list.map(function(x){return '<option value="'+esc(x.id)+'">'+esc(x.name)+' · '+esc(x.email)+(x.hasJoined?'':' (ainda não entrou)')+'</option>';}).join('')+'</select></label>'+
       '<label>Nova palavra-passe<input type="password" name="pw" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
       '<label>Repetir palavra-passe<input type="password" name="pw2" required minlength="8" maxlength="72" autocomplete="new-password"></label>'+
-      '<label class="fxi-check"><input type="checkbox" name="full"> Dar também acesso completo</label>'+
       '</div><div class="fxi-form-actions"><button type="submit" class="fxi-primary">Guardar palavra-passe</button></div></form>':'');
     var rl=box.querySelector('[data-fx-reload]');if(rl)rl.addEventListener('click',function(){location.reload();});
-    var f=box.querySelector('#fx-new-user');
-    if(acc.draft){fld(f,'name').value=acc.draft.name;fld(f,'email').value=acc.draft.email;acc.draft=null;}
-    f.querySelector('[name=show]').addEventListener('change',function(e){f.querySelectorAll('[type=password],[data-pw]').forEach(function(i){i.type=e.target.checked?'text':'password';i.setAttribute('data-pw','1');});});
-    f.addEventListener('submit',function(e){e.preventDefault();
-      var name=val(f,'name'),email=val(f,'email').toLowerCase(),pw=fld(f,'pw').value,err=pwOk(pw,fld(f,'pw2').value);
-      if(err){acc.msg={text:err,bad:true};acc.draft={name:name,email:email};accessUi(true);return;}
-      var bt=f.querySelector('button[type=submit]');bt.disabled=true;bt.textContent='A criar…';
-      var existing=acc.members.find(function(x){return x.email.toLowerCase()===email;});
-      var step=existing?Promise.resolve({members:acc.members}):api('/access',{name:name,email:email,enabled:true,permissions:FULL});
-      step.then(function(j){var mm=(j.members||[]).find(function(x){return x.email.toLowerCase()===email;});if(!mm)throw new Error('Não foi possível criar o utilizador.');
-        if(existing&&!existing.enabled)throw new Error('Este email já existe mas está suspenso. Reactive-o na lista abaixo.');
-        return usersApi({id:mm.id,password:pw});})
-      .then(function(){acc.msg={text:'Utilizador '+name+' criado. Já pode entrar com '+email+' e a palavra-passe definida.'};acc.members=null;accessUi(true);})
-      .catch(function(er){acc.msg={text:er.message,bad:true};acc.draft={name:name,email:email};acc.members=null;accessUi(true);});
-    });
     var g=box.querySelector('#fx-set-pw');
     if(g)g.addEventListener('submit',function(e){e.preventDefault();
-      var id=val(g,'id'),pw=fld(g,'pw').value,err=pwOk(pw,fld(g,'pw2').value),full=fld(g,'full').checked;
+      var id=val(g,'id'),pw=fld(g,'pw').value,err=pwOk(pw,fld(g,'pw2').value);
       var mm=acc.members.find(function(x){return x.id===id;});
-      if(!mm){acc.msg={text:'Escolha o utilizador.',bad:true};accessUi(true);return;}
+      if(!mm){acc.msg={text:'Escolha o colaborador.',bad:true};accessUi(true);return;}
       if(err){acc.msg={text:err,bad:true};accessUi(true);return;}
       var bt=g.querySelector('button[type=submit]');bt.disabled=true;bt.textContent='A guardar…';
-      var step=full?api('/access',{id:mm.id,revision:mm.revision,name:mm.name,email:mm.email,enabled:true,permissions:FULL}):Promise.resolve();
-      step.then(function(){return usersApi({id:mm.id,password:pw});})
-      .then(function(){acc.msg={text:'Palavra-passe de '+mm.name+' guardada'+(full?' e acesso completo dado':'')+'.'};acc.members=null;accessUi(true);})
+      usersApi({id:mm.id,password:pw})
+      .then(function(){acc.msg={text:'Palavra-passe de '+mm.name+' guardada. Já pode entrar com '+mm.email+'.'};acc.members=null;accessUi(true);})
       .catch(function(er){acc.msg={text:er.message,bad:true};acc.members=null;accessUi(true);});
     });
   }
