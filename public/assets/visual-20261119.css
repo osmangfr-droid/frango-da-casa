@@ -1,0 +1,147 @@
+/* Frango da Casa — camada visual 19/11/2026
+   Carregada depois do CSS principal. Só altera aparência; não muda dados nem comportamento. */
+
+:root{
+  --fx-shadow:0 1px 2px rgba(22,62,49,.04),0 4px 14px -6px rgba(22,62,49,.08);
+  --fx-shadow-hover:0 2px 4px rgba(22,62,49,.06),0 10px 24px -10px rgba(22,62,49,.16);
+  --fx-pos:#0a7a4f;
+  --fx-neg:#c2410c;
+  --fx-amber:#b45309;
+  --fx-blue:#1d4ed8;
+  --fx-grey:#6b7a72;
+}
+
+/* ---------- Leitura geral ---------- */
+body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:6px}
+
+/* ---------- Cartões e painéis ---------- */
+.panel,.metric{box-shadow:var(--fx-shadow);transition:box-shadow .18s ease,transform .18s ease}
+.metric:hover{box-shadow:var(--fx-shadow-hover)}
+.metric-label{font-weight:500}
+
+/* ---------- Botões ---------- */
+.primary{box-shadow:0 1px 0 rgba(255,255,255,.12) inset,0 6px 14px -8px rgba(7,91,67,.55);transition:filter .15s ease,transform .15s ease}
+.primary:hover{filter:brightness(1.08)}
+.primary:active{transform:translateY(1px)}
+.mini-button,.secondary,.text-button{transition:background-color .15s ease,color .15s ease}
+
+/* ---------- Tabelas ---------- */
+th{font-size:11px;letter-spacing:.3px;text-transform:none}
+td{font-size:12.5px}
+tbody tr{transition:background-color .12s ease}
+tbody tr:hover td{background:#f7faf8}
+td,th{font-variant-numeric:tabular-nums}
+
+/* colunas numéricas alinhadas à direita (marcadas pelo script) */
+[data-fx~="num"]{text-align:right}
+th[data-fx~="num"]{text-align:right}
+td[data-fx~="neg"]{color:var(--fx-neg)!important;font-weight:600}
+td[data-fx~="zero"]{color:#9aa79f}
+
+/* células mais compactas para caber mais colunas sem deslizar */
+.table-scroll :is(th,td){padding-left:12px;padding-right:12px}
+.table-scroll :is(th,td):first-child{padding-left:18px}
+.table-scroll :is(th,td):last-child{padding-right:16px}
+.table-scroll .row-actions{gap:4px}
+
+/* cabeçalhos longos quebram linha em vez de alargar a tabela */
+.table-scroll th{white-space:normal;line-height:1.3;min-width:64px;vertical-align:bottom}
+.table-scroll th:first-child{min-width:0}
+
+/* sombra nas margens quando a tabela tem mais colunas para deslizar */
+.table-scroll{
+  container-type:inline-size;
+  background:
+    linear-gradient(to right,var(--paper) 40%,rgba(255,255,255,0)) left center/48px 100% no-repeat local,
+    linear-gradient(to left,var(--paper) 40%,rgba(255,255,255,0)) right center/48px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%,rgba(22,62,49,.16),transparent) left center/14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%,rgba(22,62,49,.16),transparent) right center/14px 100% no-repeat scroll;
+  scrollbar-width:thin;scrollbar-color:#c9d6cd transparent;
+}
+
+/* totais no rodapé sempre dentro da área visível */
+.table-scroll .table-totals{
+  position:sticky;left:18px;max-width:calc(100cqw - 56px);
+  row-gap:8px;column-gap:20px;
+}
+
+/* ---------- Estados (pastilhas) ---------- */
+td[data-fx~="st"]{font-weight:600}
+td[data-fx~="st"]::before{
+  content:"";display:inline-block;width:8px;height:8px;border-radius:50%;
+  margin-right:8px;vertical-align:1px;background:currentColor;
+  box-shadow:0 0 0 3px color-mix(in srgb,currentColor 18%,transparent);
+}
+td[data-fx~="st-ok"]{color:var(--fx-pos)!important}
+td[data-fx~="st-warn"]{color:var(--fx-amber)!important}
+td[data-fx~="st-bad"]{color:var(--fx-neg)!important}
+td[data-fx~="st-info"]{color:var(--fx-blue)!important}
+td[data-fx~="st-off"]{color:var(--fx-grey)!important}
+td[data-fx~="st-fact"]{color:#6d28d9!important}
+
+/* ---------- Fechos diários (Visão geral) ---------- */
+.frango-daily{padding:26px 24px 24px}
+.frango-daily-heading{margin-bottom:18px;flex-wrap:wrap}
+.frango-daily-heading p.eyebrow{font-size:8px;letter-spacing:1.8px;line-height:1.5;color:#58796a;font-weight:650;margin:0 0 8px}
+.frango-daily-heading h2{font-size:19px;font-weight:600;color:var(--dark);margin:0 0 4px}
+.frango-daily-heading label{font-size:12px;color:#345a40}
+.frango-daily-totals span{font-weight:500}
+.frango-daily-totals strong{font-size:22px;letter-spacing:-.3px;font-variant-numeric:tabular-nums}
+.frango-daily-heading input[type=date]{min-height:42px;border-radius:9px}
+.frango-daily h3{margin:22px 0 12px}
+.frango-daily-totals{margin-bottom:12px}
+.frango-daily-totals>*{
+  background:linear-gradient(180deg,#f6faf7,#eef5f0);
+  border:1px solid #e1eae3;border-radius:11px;padding:16px 16px 14px;min-height:0;
+}
+.frango-daily-note{margin:10px 0 0;font-size:12.5px}
+.frango-daily-table{margin-top:8px;background:var(--paper)}
+.frango-daily-table th{font-size:11px}
+.frango-daily-table td{font-size:12.5px}
+.frango-daily-table tfoot :is(td,th){background:#edf4ee;font-weight:600;color:#1f4a35}
+
+/* ---------- Relatórios: Análise do aviário ---------- */
+.fx-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:16px 0 14px}
+.fx-kpis-scope{grid-column:1/-1;margin:0;font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:#58796a}
+.fx-kpi{background:linear-gradient(180deg,#f6faf7,#eef5f0);border:1px solid #e1eae3;border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.fx-kpi span{font-size:11.5px;color:#5f7468;font-weight:500}
+.fx-kpi strong{font-size:15px;color:#163e31;font-variant-numeric:tabular-nums;letter-spacing:-.2px;white-space:nowrap}
+.fx-kpi.neg strong{color:var(--fx-neg)}
+.fx-kpi.pos strong{color:var(--fx-pos)}
+.fx-kpi.warn strong{color:var(--fx-amber)}
+.fx-report-index{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:4px 0 18px;padding:10px 12px;background:#f7faf8;border:1px solid #e5ece7;border-radius:11px}
+.fx-report-index span{font-size:11.5px;color:#6c7f73;margin-right:4px}
+.fx-report-index button{border:1px solid #d9e5dc;background:#fff;color:#215a3e;border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer}
+.fx-report-index button:hover{background:#e7f3ec;border-color:#bfd8c8}
+.fx-report h3{margin:34px 0 6px;padding-top:22px;border-top:1px solid #e5ece7;font-size:16px;font-weight:650;color:var(--dark);scroll-margin-top:16px}
+.fx-report h3+p{margin:0 0 12px;max-width:80ch;line-height:1.5}
+.fx-report .table-scroll{margin-top:8px;border:1px solid #e5ece7;border-radius:10px}
+.fx-report .table-scroll th[scope=row]{white-space:nowrap;font-weight:600}
+@media (width<=700px){.fx-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.fx-kpi strong{font-size:16px}}
+@media print{.fx-report-index{display:none}}
+
+/* ---------- Cobranças: botão de filtro com tamanho normal ---------- */
+summary{font-size:13px;font-weight:600}
+
+/* ---------- Telemóvel ---------- */
+@media (width<=700px){
+  .frango-daily{padding:20px 16px}
+  .frango-daily-totals{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .frango-daily-totals>*{padding:13px 12px}
+  .frango-daily-heading{gap:12px}
+  .frango-daily-heading>*{width:100%}
+  td{font-size:13px}
+}
+
+@media print{
+  .panel,.metric{box-shadow:none}
+  td[data-fx~="st"]::before{box-shadow:none}
+}
+
+/* ---------- Aviso de saldo negativo ---------- */
+.info-strip.fx-alert{background:#fff4e5;border:1px solid #f3c98b;color:#8a4b08;border-radius:10px}
+.info-strip.fx-alert span{font-weight:550}
+.fx-alert-line{display:flex;gap:6px;align-items:flex-start;margin:8px 0 4px;padding:8px 10px;background:#fff4e5;border:1px solid #f3c98b;border-radius:9px;color:#8a4b08;font-size:12.5px;font-weight:550}
+.fx-alert-line svg{flex:none;margin-top:1px}
+.info-strip.fx-note{background:#eef4fb;border:1px solid #c9daef;color:#1e3a5f;border-radius:10px}

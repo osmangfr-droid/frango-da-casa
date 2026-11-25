@@ -1,0 +1,10 @@
+{
+  // Frango da Casa — site estático alojado no Cloudflare (Workers Static Assets)
+  "name": "frango-da-casa",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./public",
+    // Qualquer endereço que não seja um ficheiro abre a app (index.html)
+    "not_found_handling": "single-page-application"
+  }
+}
