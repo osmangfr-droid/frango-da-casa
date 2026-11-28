@@ -137,13 +137,16 @@
     var allQ=sum(list,function(s){return s.b.quantity;}),allD=sum(list,function(s){return s.deaths;});
     var soldAll=sum(closed,function(s){return s.sold;});
     var avgProfit=soldAll?sum(closed,function(s){return s.profit;})/soldAll:NaN;
+    var av=timeAverages(d);
     var head='<div class="fxi-summary">'+
       stat('Mortalidade média',pct(allD/allQ),tone(allD/allQ,.05,.1),int(allD)+' mortes em '+int(allQ)+' aves')+
       stat('Lucro por frango vendido',isFinite(avgProfit)?money(avgProfit):'—',isFinite(avgProfit)?(avgProfit>=0?'good':'bad'):'','média dos lotes encerrados')+
       stat('Melhor lote',best?esc(best.b.name):'—','',best?money(best.profitPerSold)+' de lucro por frango':'ainda sem lotes encerrados com vendas')+
+      stat('Até à 1.ª venda',av.toFirst!==null?'dia '+int(av.toFirst):'—','',av.toFirst!==null?'média · dia 1 = chegada ao aviário':'falta a data de chegada dos lotes')+
+      stat('Duração média do lote',daysLabel(av.duration),'',av.duration!==null?'da chegada ao encerramento':'falta chegada e encerramento')+
       '</div>';
     var cards=list.map(function(s){
-      var b=s.b,st=STATUS[b.status]||b.status;
+      var b=s.b,st=STATUS[b.status]||b.status,tl=timeline(d,b);
       var note='';
       if(b.status!=='encerrado'&&s.profit<0&&s.breakEven!==null){
         note=s.breakEven<=s.balance
@@ -155,7 +158,7 @@
         note='<p class="fxi-note">Custo até agora: <b>'+money(s.costPerBird)+'</b> por ave. Para não perder, o preço de venda médio tem de ficar acima deste valor.</p>';
       }
       return '<article class="fxi-card">'+
-        '<header><div><h3>'+esc(b.name)+'</h3><p>Entrada '+day(b.date)+(s.age!==null?' · <b>'+s.age+' dias</b>':'')+'</p></div><span class="fxi-pill s-'+esc(b.status)+'">'+esc(st)+'</span></header>'+
+        '<header><div><h3>'+esc(b.name)+'</h3><p>'+(tl.waiting?'Facturado '+day(tl.invoiced)+' · <b>por levantar</b>':tl.arrival?'Chegou '+day(tl.arrival)+(tl.duration!==null?' · <b>'+daysLabel(tl.duration)+'</b>':tl.dayN!==null?' · <b>dia '+int(tl.dayN)+'</b>':''):'Facturado '+day(b.date))+'</p></div><span class="fxi-pill s-'+esc(b.status)+'">'+esc(st)+'</span></header>'+
         birdBar(s)+
         '<div class="fxi-grid">'+
           stat('Mortalidade',pct(s.mortality),tone(s.mortality,.05,.1))+
@@ -166,7 +169,7 @@
           stat('Lucro por frango',s.sold?money(s.profitPerSold):'—',s.sold?(s.profitPerSold>=0?'good':'bad'):'',s.sold?'margem '+pct(s.margin):'')+
           stat('Resultado',money(s.profit),s.profit>=0?'good':'bad')+
           stat('Recebido',s.revenue?pct(s.receivedRate):'—',s.revenue?tone(s.receivedRate,.95,.8,true):'',(s.debt>0?money0(s.debt)+' em dívida':'nada em dívida')+(s.lost?' · '+money0(s.lost)+' perdido':''))+
-        '</div>'+note+'</article>';
+        '</div>'+note+lotTimeHtml(d,b,tl,av)+'</article>';
     }).join('');
     var rows=list.map(function(s){
       return '<tr><td>'+esc(s.b.name)+'</td><td>'+esc(STATUS[s.b.status]||s.b.status)+'</td><td class="n">'+int(s.b.quantity)+'</td><td class="n '+tone(s.mortality,.05,.1)+'">'+pct(s.mortality)+'</td><td class="n">'+money(s.costPerBird)+'</td><td class="n">'+(s.sold?money(s.avgPrice):'—')+'</td><td class="n '+(s.sold?(s.profitPerSold>=0?'good':'bad'):'')+'">'+(s.sold?money(s.profitPerSold):'—')+'</td><td class="n '+(s.profit>=0?'good':'bad')+'">'+money(s.profit)+'</td></tr>';
@@ -464,6 +467,102 @@
     var img=doc.querySelector('img');if(img&&!img.complete){img.onload=img.onerror=go;setTimeout(go,1500);}else setTimeout(go,50);
   }
 
+  /* ---------- Datas dos lotes: facturação, chegada ao aviário (dia 1), vendas e encerramento ---------- */
+  // Facturado = pintos pagos e ainda por levantar. Chegada = dia em que o lote passa a «Em criação» (dia 1 da criação).
+  // As datas automáticas são gravadas pela base de dados ao mudar o estado; o administrador corrige-as em «Datas dos lotes».
+  var lotDates={map:{},canEdit:false,loaded:false,loading:false,error:''};
+  function lotsApi(body){
+    var t=token();if(!t)return Promise.reject(new Error('A sessão terminou. Volta a entrar.'));
+    var o={headers:{Authorization:'Bearer '+t,apikey:KEY},credentials:'omit',cache:'no-store'};
+    if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+    return fetch(API.replace(/aviario-web$/,'aviario-lots'),o).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Não foi possível ler as datas dos lotes.');return j;});});
+  }
+  function setLotDates(j){var m={};(j.dates||[]).forEach(function(x){m[x.batch_id]={arrival:x.arrival||'',closed:x.closed||'',arrivalSource:x.arrival_source,closedSource:x.closed_source};});lotDates.map=m;lotDates.canEdit=!!j.canEdit;lotDates.loaded=true;lotDates.error='';}
+  function fetchLotDates(then){
+    if(lotDates.loading)return;lotDates.loading=true;
+    lotsApi().then(setLotDates).catch(function(e){lotDates.error=e.message;lotDates.loaded=true;})
+      .then(function(){lotDates.loading=false;if(then)then();if(overlay&&overlay.classList.contains('open'))render();});
+  }
+  function timeline(d,b){
+    var x=lotDates.map[b.id]||{},sales=d.sales.filter(function(s){return s.batch===b.id&&s.date;}).map(function(s){return s.date;}).sort();
+    var first=sales[0]||'',last=sales[sales.length-1]||'',arrival=x.arrival||'',closed=b.status==='encerrado'?(x.closed||''):'';
+    var t=today(),ref=closed||(b.status==='encerrado'?last:t);
+    return {invoiced:b.date||'',arrival:arrival,arrivalSource:x.arrivalSource,closed:closed,closedSource:x.closedSource,first:first,last:last,
+      wait:arrival&&b.date?daysBetween(b.date,arrival):null,
+      dayN:arrival&&b.status!=='facturado'&&ref?daysBetween(arrival,ref)+1:null,
+      toFirst:arrival&&first?daysBetween(arrival,first)+1:null,
+      salesDays:first&&last?daysBetween(first,last)+1:null,
+      duration:arrival&&closed?daysBetween(arrival,closed)+1:null,
+      waiting:b.status==='facturado'};
+  }
+  function avg(xs){xs=xs.filter(function(v){return v!==null&&isFinite(v);});return xs.length?xs.reduce(function(a,b){return a+b;},0)/xs.length:null;}
+  function timeAverages(d){
+    var tls=d.batches.filter(function(b){return b.quantity>0;}).map(function(b){return timeline(d,b);});
+    return {wait:avg(tls.map(function(x){return x.wait;})),toFirst:avg(tls.map(function(x){return x.toFirst;})),salesDays:avg(tls.filter(function(x){return x.duration!==null;}).map(function(x){return x.salesDays;})),duration:avg(tls.map(function(x){return x.duration;})),
+      n:{toFirst:tls.filter(function(x){return x.toFirst!==null;}).length,duration:tls.filter(function(x){return x.duration!==null;}).length}};
+  }
+  function dayLabel(n){return n===null?'—':'dia '+int(n);}
+  function daysLabel(n){return n===null||!isFinite(n)?'—':int(n)+(Math.round(n)===1?' dia':' dias');}
+  function lotTimeHtml(d,b,tl,av){
+    if(tl.waiting)return '<p class="fxi-note">Facturado a '+day(tl.invoiced)+': pintos pagos, ainda por levantar'+(tl.invoiced?' (há '+int(daysBetween(tl.invoiced,today()))+' dias)':'')+'. Ao chegarem ao aviário, mude o estado para «Em criação»: esse dia conta como dia 1.</p>';
+    if(!tl.arrival)return '<p class="fxi-note">Sem data de chegada ao aviário. '+(lotDates.canEdit?'Preencha-a em Indicadores › Datas dos lotes para o sistema medir os tempos deste lote.':'O administrador pode preenchê-la em Datas dos lotes.')+'</p>';
+    var parts=['Chegou a <b>'+day(tl.arrival)+'</b>'+(tl.wait!==null?' ('+daysLabel(tl.wait)+' depois da facturação)':'')];
+    if(tl.toFirst!==null)parts.push('1.ª venda no <b>'+dayLabel(tl.toFirst)+'</b>');
+    else if(b.status!=='encerrado'&&av.toFirst!==null){var exp=addDay(tl.arrival,Math.round(av.toFirst)-1);parts.push('1.ª venda prevista por volta de <b>'+day(exp)+'</b> (média dos lotes: dia '+int(av.toFirst)+')');}
+    if(tl.salesDays!==null)parts.push('vendas durante '+daysLabel(tl.salesDays));
+    if(tl.duration!==null)parts.push('encerrado no <b>'+dayLabel(tl.duration)+'</b>');
+    return '<p class="fxi-note fxi-time">'+parts.join(' · ')+'.</p>';
+  }
+  function renderDatas(d){
+    var lots=d.batches.filter(function(b){return b.quantity>0;}).slice().sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+    var av=timeAverages(d),edit=lotDates.canEdit,t=today();
+    var src=function(s){return s==='manual'?'<small>corrigida à mão</small>':s==='auto'?'<small>automática</small>':'';};
+    var rows=lots.map(function(b){
+      var tl=timeline(d,b),x=lotDates.map[b.id]||{};
+      return '<tr data-lot="'+esc(b.id)+'"><td><b>'+esc(b.name)+'</b><small>'+esc(STATUS[b.status]||b.status)+'</small></td>'+
+        '<td>'+day(tl.invoiced)+'</td>'+
+        '<td>'+(edit?'<input type="date" data-f="arrival" value="'+esc(x.arrival||'')+'" min="'+esc(b.date||'')+'" max="'+t+'">':(x.arrival?day(x.arrival):'—'))+src(x.arrival?x.arrivalSource:'')+'</td>'+
+        '<td>'+(tl.first?day(tl.first):'—')+(tl.toFirst!==null?'<small>'+dayLabel(tl.toFirst)+'</small>':'')+'</td>'+
+        '<td>'+(tl.last?day(tl.last):'—')+(tl.salesDays!==null?'<small>'+daysLabel(tl.salesDays)+' de vendas</small>':'')+'</td>'+
+        '<td>'+(b.status==='encerrado'?(edit?'<input type="date" data-f="closed" value="'+esc(x.closed||'')+'" max="'+t+'">':(x.closed?day(x.closed):'—'))+src(x.closed?x.closedSource:''):'<span class="fxi-muted">—</span>')+'</td>'+
+        '<td class="n"><b>'+(tl.duration!==null?daysLabel(tl.duration):tl.dayN!==null?dayLabel(tl.dayN)+' (em curso)':'—')+'</b></td>'+
+        '<td class="fxi-act">'+(edit?'<button type="button" class="fxi-primary fxi-sm" data-save-lot="'+esc(b.id)+'">Guardar</button>':'')+'</td></tr>';
+    }).join('');
+    return flashHtml()+(lotDates.error?'<div class="fxi-flash bad">'+esc(lotDates.error)+'</div>':'')+
+      '<div class="fxi-summary fxi-summary4">'+
+        stat('Espera até ao levantamento',daysLabel(av.wait),'','média entre a facturação e a chegada')+
+        stat('Até à 1.ª venda',av.toFirst!==null?'dia '+int(av.toFirst):'—','',av.n.toFirst?'média de '+av.n.toFirst+(av.n.toFirst===1?' lote':' lotes')+' (dia 1 = chegada)':'precisa da data de chegada')+
+        stat('Período de vendas',daysLabel(av.salesDays),'','média dos lotes encerrados')+
+        stat('Duração do lote',daysLabel(av.duration),'',av.n.duration?'da chegada ao encerramento · '+av.n.duration+(av.n.duration===1?' lote':' lotes'):'precisa da chegada e do encerramento')+
+      '</div>'+
+      '<section class="fxi-compare"><h3>Datas dos lotes</h3><div class="fxi-scroll"><table class="fxi-dates"><thead><tr><th>Lote</th><th>Facturado</th><th>Chegada ao aviário (dia 1)</th><th>1.ª venda</th><th>Última venda</th><th>Encerrado</th><th class="n">Duração</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+      '<p class="fxi-foot">Facturado = pintos pagos ao fornecedor, ainda por levantar (data do lote). A chegada é gravada sozinha no dia em que o lote passa a «Em criação» e conta como dia 1; o encerramento é gravado no dia em que passa a «Encerrado». As vendas vêm dos registos. '+(edit?'Pode corrigir as datas aqui (por exemplo, nos lotes antigos) e carregar em «Guardar».':'Só o administrador corrige as datas.')+'</p></section>';
+  }
+  function bindDatas(body,d){
+    body.querySelectorAll('[data-save-lot]').forEach(function(bt){bt.addEventListener('click',function(){
+      var tr=bt.closest('tr'),id=bt.getAttribute('data-save-lot');
+      var a=tr.querySelector('[data-f=arrival]'),c=tr.querySelector('[data-f=closed]');
+      var cur=lotDates.map[id]||{};
+      bt.disabled=true;bt.textContent='A guardar…';
+      lotsApi({batch:id,arrival:a?(a.value||null):(cur.arrival||null),closed:c?(c.value||null):(cur.closed||null)})
+        .then(function(j){setLotDates(j);var b=d.batches.find(function(z){return z.id===id;});flash={text:'Datas de '+(b?b.name:'lote')+' guardadas.'};render();})
+        .catch(function(e){flash={text:e.message,bad:true};render();});
+    });});
+  }
+  // Depois de a app gravar (por exemplo, mudar o estado de um lote), volta a ler as datas.
+  (function(){
+    if(window.__fxLotFetch)return;window.__fxLotFetch=true;
+    var orig=window.fetch;
+    window.fetch=function(input,init){
+      var p=orig.apply(this,arguments);
+      try{
+        var url=typeof input==='string'?input:(input&&input.url)||'',method=(init&&init.method)||(input&&input.method)||'GET';
+        if(method==='POST'&&/\/aviario-web\/(farm|batches)/.test(url.split('?')[0]))p.then(function(r){if(r.ok)setTimeout(function(){lotDates.loading=false;fetchLotDates(function(){});},800);}).catch(function(){});
+      }catch(e){}
+      return p;
+    };
+  })();
+
   /* ---------- Previsão de compras (lotes em criação e facturados) ---------- */
   // Regras guardadas no servidor (função aviario-plan); o administrador muda-as em «Editar regras».
   // Regras originais: por cada 100 pintos 1 saco de Ração A1 e 3 sacos de Ração A2; por lote 1 saco de carvão e 1 vitamina.
@@ -601,7 +700,7 @@
       var form=payForm&&payForm.batch===b.id?'<tr class="fxi-pay-row"><td colspan="8">'+payFormHtml(payForm)+'</td></tr>':'';
       var perBird=b.quantity?(b.purchaseCost+p.spent+p.left)/b.quantity:NaN;
       return '<article class="fxi-card fxi-plan">'+
-        '<header><div><h3>'+esc(b.name)+'</h3><p>'+int(b.quantity)+' pintos · entrada '+day(b.date)+'</p></div><span class="fxi-pill s-'+esc(b.status)+'">'+esc(STATUS[b.status]||b.status)+'</span></header>'+
+        '<header><div><h3>'+esc(b.name)+'</h3><p>'+(function(){var tl=timeline(d,b);return int(b.quantity)+' pintos · facturado '+day(b.date)+(tl.waiting?' · <b>por levantar</b>':tl.arrival?' · chegou '+day(tl.arrival)+(tl.dayN!==null?' (<b>dia '+int(tl.dayN)+'</b>)':''):'');})()+'</p></div><span class="fxi-pill s-'+esc(b.status)+'">'+esc(STATUS[b.status]||b.status)+'</span></header>'+
         '<div class="fxi-grid">'+
           stat('Previsto (insumos)',money(p.plan))+
           stat('Falta comprar',money(p.left),p.left?'warn':'good',p.left?'segundo os preços padrão':'tudo comprado')+
@@ -733,7 +832,9 @@
     if(!lastData){body.innerHTML='<div class="fxi-empty">A carregar os dados…</div>';return;}
     var d=lastData.state;
     d.customers=d.customers||[];d.payments=d.payments||[];d.production=d.production||[];d.expenses=d.expenses||[];
+    if(!lotDates.loaded&&!lotDates.loading)fetchLotDates();
     if(view==='previsao'){if(!planData.loaded&&!planData.loading)fetchPlan();body.innerHTML=renderPrevisao(d);bindPrevisao(body,d);bindPlanEditor(body);var eb=body.querySelector('#fxi-rules-edit');if(eb)eb.addEventListener('click',function(){planEdit=JSON.parse(JSON.stringify(planRules()));render();var r=overlay.querySelector('#fxi-rules');if(r)r.scrollIntoView({behavior:'smooth',block:'start'});});return;}
+    if(view==='datas'){body.innerHTML=lotDates.loaded?renderDatas(d):'<div class="fxi-empty">A carregar as datas dos lotes…</div>';bindDatas(body,d);return;}
     if(view==='perdas'){body.innerHTML=renderPerdas(d);bindPerdas(body,d);return;}
     if(view==='fechos'){
       if(!extraData){body.innerHTML='<div class="fxi-empty'+(extraError?' bad':'')+'">'+esc(extraError||'A carregar os dados…')+'</div>';return;}
@@ -774,7 +875,7 @@
       overlay=h('<div class="fxi-overlay" role="dialog" aria-modal="true" aria-labelledby="fxi-title">'+
         '<div class="fxi-panel"><header class="fxi-top"><div><p class="eyebrow">FRANGO DA CASA</p><h1 id="fxi-title">Indicadores</h1><p class="fxi-sub">Como está a correr cada lote, quem falta pagar e os fechos de caixa.</p></div>'+
         '<div class="fxi-top-actions"><button type="button" class="fxi-refresh" title="Actualizar">Actualizar</button><button type="button" class="fxi-close" aria-label="Fechar">✕</button></div></header>'+
-        '<div class="fxi-tabs" role="tablist"><button type="button" role="tab" data-v="lotes">Indicadores por lote</button><button type="button" role="tab" data-v="lembretes">Lembretes de dívida</button><button type="button" role="tab" data-v="fechos">Histórico de fechos</button><button type="button" role="tab" data-v="perdas">Dívidas perdidas</button></div>'+
+        '<div class="fxi-tabs" role="tablist"><button type="button" role="tab" data-v="lotes">Indicadores por lote</button><button type="button" role="tab" data-v="lembretes">Lembretes de dívida</button><button type="button" role="tab" data-v="fechos">Histórico de fechos</button><button type="button" role="tab" data-v="perdas">Dívidas perdidas</button><button type="button" role="tab" data-v="datas">Datas dos lotes</button></div>'+
         '<div class="fxi-body"></div></div></div>');
       document.body.appendChild(overlay);
       overlay.querySelector('.fxi-close').addEventListener('click',close);
@@ -783,6 +884,7 @@
       document.addEventListener('keydown',function(e){if(e.key==='Escape'&&overlay.classList.contains('open'))close();});
     }
     var plan=view==='previsao';
+    lotDates.loaded=false;
     overlay.querySelector('#fxi-title').textContent=plan?'Previsão de compras':'Indicadores';
     overlay.querySelector('.fxi-sub').textContent=plan?'O que cada lote em criação ou facturado ainda precisa de comprar, quanto custa, e o pagamento a partir daqui.':'Como está a correr cada lote, quem falta pagar e os fechos de caixa.';
     overlay.querySelector('.fxi-tabs').style.display=plan?'none':'';
@@ -1012,14 +1114,15 @@
   function addDays(d,n){var x=new Date(d+'T12:00:00Z');x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10);}
   function monthEnd(m){var y=+m.slice(0,4),n=+m.slice(5,7);return new Date(Date.UTC(y,n,0,12)).toISOString().slice(0,10);}
   function lotRange(farm,r,t){
-    var b=r.batch;if(!b.date)return null;
-    var end=t;
-    if(b.status==='encerrado'){
-      end=b.date;
+    var b=r.batch,x=lotDates.map[b.id]||{};if(!b.date||b.status==='facturado')return null;
+    var startD=x.arrival||b.date,end=t;
+    if(b.status==='encerrado'&&x.closed)end=x.closed;
+    else if(b.status==='encerrado'){
+      end=startD;
       r.sales.forEach(function(s){if(s.date&&s.date>end)end=s.date;});
       farm.production.forEach(function(p){if(p.batch===b.id&&p.date&&p.date>end)end=p.date;});
     }
-    return {start:b.date,end:end<b.date?b.date:end};
+    return {start:startD,end:end<startD?startD:end};
   }
   // Salários de cada mês divididos pelos lotes activos nesse mês, na proporção dos dias de cada lote no mês.
   function salaryShares(farm,rows){
@@ -1061,7 +1164,7 @@
         var chicks=r.costs&&r.costs.get?(r.costs.get('Compra de pintos')||0):(r.batch.purchaseCost||0);
         var salary=sal.share[r.batch.id]||0,gross=r.revenue-r.cost;
         var g=sal.ranges[all.indexOf(r)];
-        return {r:r,c:c,frozen:sum(froz,function(s){return s.quantity;}),chicks:chicks,other:r.cost-chicks,salary:salary,gross:gross,net:gross-salary,range:g,months:sal.months[r.batch.id]};
+        return {tl:timeline(farm,r.batch),r:r,c:c,frozen:sum(froz,function(s){return s.quantity;}),chicks:chicks,other:r.cost-chicks,salary:salary,gross:gross,net:gross-salary,range:g,months:sal.months[r.batch.id]};
       });
       var many=data.length>1;
       var tot=function(f){return sum(data,f);};
@@ -1084,6 +1187,12 @@
         ['row','Ofertas',function(x){return qty(x.r.gifts);},function(){return qty(tot(function(x){return x.r.gifts;}));}],
         ['row','Outras saídas (perdas)',function(x){return qty(x.r.losses);},function(){return qty(tot(function(x){return x.r.losses;}));}],
         ['row','Ainda no lote',function(x){return qty(x.r.available);},function(){return qty(tot(function(x){return x.r.available;}));}],
+        ['sec','Tempos (dia 1 = chegada ao aviário)'],
+        ['row','Facturado em',function(x){return day(x.tl.invoiced);},function(){return '';}],
+        ['row','Chegada ao aviário',function(x){return x.tl.waiting?'por levantar':x.tl.arrival?day(x.tl.arrival):'sem data';},function(){var a=avg(data.map(function(x){return x.tl.wait;}));return a!==null?'espera média '+daysLabel(a):'';}],
+        ['row','1.ª venda',function(x){return x.tl.toFirst!==null?dayLabel(x.tl.toFirst)+' · '+day(x.tl.first):x.tl.first?day(x.tl.first):'—';},function(){var a=avg(data.map(function(x){return x.tl.toFirst;}));return a!==null?'média: dia '+int(a):'';}],
+        ['row','Dias de vendas',function(x){return daysLabel(x.tl.salesDays);},function(){var a=avg(data.filter(function(x){return x.tl.duration!==null;}).map(function(x){return x.tl.salesDays;}));return a!==null?'média '+daysLabel(a):'';}],
+        ['row','Duração do lote',function(x){return x.tl.duration!==null?daysLabel(x.tl.duration)+' · encerrado '+day(x.tl.closed):x.tl.dayN!==null?dayLabel(x.tl.dayN)+' (em curso)':'—';},function(){var a=avg(data.map(function(x){return x.tl.duration;}));return a!==null?'média '+daysLabel(a):'';},'b'],
         ['sec','Dinheiro'],
         ['row','Compra de pintos',function(x){return money(x.chicks);},function(){return money(tot(function(x){return x.chicks;}));}],
         ['row','Despesas do lote',function(x){return money(x.other);},function(){return money(tot(function(x){return x.other;}));}],
@@ -1107,10 +1216,10 @@
         if(many)cells.push(h('td',{style:Object.assign({},cellStyle,bg,{fontWeight:700,borderLeft:'2px solid #cfdcd3'},l[6]?tone(l[6]()):{},kind==='i'?{color:'#58796a',fontWeight:400}:{}),children:l[3]()},'t'));
         return h('tr',{children:[lab].concat(cells)},'r'+i);
       });
-      var period=data.map(function(x){return x.r.batch.name+': '+(x.range?day(x.range.start)+' a '+(x.r.batch.status==='encerrado'?day(x.range.end):'hoje'):'sem data');}).join(' · ');
+      var period=data.map(function(x){return x.r.batch.name+': '+(x.range?day(x.range.start)+' a '+(x.r.batch.status==='encerrado'?day(x.range.end):'hoje'):x.r.batch.status==='facturado'?'por levantar':'sem data');}).join(' · ');
       var notes=['Gasto total = compra dos pintos + despesas registadas no lote. Lucro bruto = total vendido − gasto total.',
         'Lucro líquido = lucro bruto − salários. Os salários de cada mês são divididos pelos lotes que estavam na quinta nesse mês, conforme os dias de cada um (da entrada dos pintos à última venda; lotes em curso até hoje). Contam só os salários já registados na Folha Salarial.',
-        'Período de cada lote: '+period+'.'];
+        'Período de cada lote: '+period+'. Os tempos contam a partir da chegada ao aviário (dia 1); um lote «Facturado» ainda não chegou e não entra nos salários.'];
       if(sal.loose&&!o.detail)notes.push('Salários de meses sem nenhum lote ('+monthsLabel(sal.looseMonths)+', '+money(sal.loose)+') não entram em nenhum lote.');
       if(data.some(function(x){return x.r.batch.status!=='encerrado';}))notes.push('Lotes ainda não encerrados: valores provisórios.');
       return h('div',{className:'fx-lot-summary',children:[
@@ -1236,7 +1345,7 @@
   }
 
   var q=false;
-  function tick(){q=false;mount();try{cobranca();}catch(e){}try{closeUi();}catch(e){}try{printUi();}catch(e){}try{accessUi();}catch(e){}}
+  function tick(){q=false;mount();try{if(!lotDates.loaded&&!lotDates.loading&&token())fetchLotDates(function(){});}catch(e){}try{cobranca();}catch(e){}try{closeUi();}catch(e){}try{printUi();}catch(e){}try{accessUi();}catch(e){}}
   function start(){
     new MutationObserver(function(){if(!q){q=true;requestAnimationFrame(tick);}}).observe(document.body,{childList:true,subtree:true});
     mount();
