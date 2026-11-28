@@ -465,32 +465,106 @@
   }
 
   /* ---------- Previsão de compras (lotes em criação e facturados) ---------- */
-  // Por cada 100 pintos: 1 saco de Ração A1 e 3 sacos de Ração A2. Por lote: 1 saco de carvão e 1 vitamina.
-  var PLAN=[
-    {key:'a1',label:'Ração A1',unit:'saco',category:'Ração',per100:1,match:function(e,p){return e.category==='Ração'&&/\ba1\b/.test(p);}},
-    {key:'a2',label:'Ração A2',unit:'saco',category:'Ração',per100:3,match:function(e,p){return e.category==='Ração'&&/\ba2\b/.test(p);}},
-    {key:'carvao',label:'Carvão',unit:'saco',category:'Custos de Produção (Utilidades)',perLot:1,match:function(e,p){return /carvao/.test(p);}},
-    {key:'vitamina',label:'Vitamina',unit:'un.',category:'Sanidade Animal',perLot:1,match:function(e,p){return /vitamin/.test(p);}}
+  // Regras guardadas no servidor (função aviario-plan); o administrador muda-as em «Editar regras».
+  // Regras originais: por cada 100 pintos 1 saco de Ração A1 e 3 sacos de Ração A2; por lote 1 saco de carvão e 1 vitamina.
+  var DEFAULT_RULES=[
+    {id:'a1',label:'Ração A1',unit:'saco',category:'Ração',mode:'per100',qty:1,keyword:'a1'},
+    {id:'a2',label:'Ração A2',unit:'saco',category:'Ração',mode:'per100',qty:3,keyword:'a2'},
+    {id:'carvao',label:'Carvão',unit:'saco',category:'Custos de Produção (Utilidades)',mode:'perLot',qty:1,keyword:'carvao'},
+    {id:'vitamina',label:'Vitamina',unit:'un.',category:'Sanidade Animal',mode:'perLot',qty:1,keyword:'vitamin'}
   ];
+  var CATS=['Ração','Transporte','Sanidade Animal','Custos de Produção (Utilidades)','Abate e congelação','Outros'];
+  var planData={rules:null,revision:0,canEdit:false,loaded:false,loading:false,updatedAt:null,updatedBy:''},planEdit=null;
+  function planRules(){return planData.rules===null||!Array.isArray(planData.rules)?DEFAULT_RULES:planData.rules;}
+  function planApi(body){
+    var t=token();if(!t)return Promise.reject(new Error('A sessão terminou. Volta a entrar.'));
+    var o={headers:{Authorization:'Bearer '+t,apikey:KEY},credentials:'omit',cache:'no-store'};
+    if(body){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+    return fetch(API.replace(/aviario-web$/,'aviario-plan'),o).then(function(r){return r.json().then(function(j){if(!r.ok){var e=new Error(j.error||'Não foi possível ler as regras.');e.status=r.status;throw e;}return j;});});
+  }
+  function fetchPlan(){
+    if(planData.loading)return;planData.loading=true;
+    planApi().then(function(j){planData.rules=j.rules;planData.revision=j.revision||0;planData.canEdit=!!j.canEdit;planData.updatedAt=j.updatedAt;planData.updatedBy=j.updatedBy||'';})
+      .catch(function(e){planData.error=e.message;})
+      .then(function(){planData.loading=false;planData.loaded=true;if(overlay&&view==='previsao')render();});
+  }
   var PLAN_STATUS={criacao:1,facturado:1};
   var payForm=null,dirtyFarm=false;
   function plainTxt(s){return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();}
   function priceOf(d,label){var p=((d.settings&&d.settings.expensePrices)||[]).find(function(x){return plainTxt(x.description)===plainTxt(label);});return p?p.unitPrice:0;}
+  function rulePrice(d,r){return r.price||priceOf(d,r.label);}
+  function ruleMatch(r,e){
+    var k=plainTxt(r.keyword).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');if(!k)return false;
+    var re=new RegExp('(^|[^a-z0-9])'+k+(k.length>=4?'':'(?![a-z0-9])'));
+    return re.test(plainTxt(e.description))&&(e.category===r.category||plainTxt(r.keyword).length>=4);
+  }
+  function ruleText(r){var u=r.unit;if(r.qty!==1&&/[aeiou]$/i.test(u))u+='s';return num(r.qty,2)+' '+u+(r.mode==='per100'?' por 100 pintos':' por lote');}
   function planFor(d,b){
     var exps=d.expenses.filter(function(e){return e.batch===b.id;});
     var used={};
-    var items=PLAN.map(function(it){
-      var need=it.per100?Math.ceil(b.quantity*it.per100/100):it.perLot;
-      var mine=exps.filter(function(e){if(used[e.id])return false;var ok=it.match(e,plainTxt(e.description));if(ok)used[e.id]=1;return ok;});
+    var items=planRules().map(function(it){
+      var need=it.mode==='per100'?Math.ceil(b.quantity*it.qty/100):it.qty;
+      var mine=exps.filter(function(e){if(used[e.id])return false;var ok=ruleMatch(it,e);if(ok)used[e.id]=1;return ok;});
       var bought=sum(mine,function(e){return e.quantity;}),spent=sum(mine,function(e){return e.amount;});
-      var price=priceOf(d,it.label),left=Math.max(0,Math.ceil(need-bought));
-      return {it:it,need:need,bought:bought,spent:spent,price:price,left:left,leftCost:left*price,planCost:need*price};
+      var price=rulePrice(d,it),left=Math.max(0,Math.ceil(need-bought));
+      return {it:it,need:need,bought:bought,spent:spent,price:price,left:left,leftCost:left*price,planCost:Math.round(need*price)};
     });
     var trans=exps.filter(function(e){return e.category==='Transporte'||/^transporte|delivery/.test(plainTxt(e.description));});
     var other=exps.filter(function(e){return !used[e.id]&&trans.indexOf(e)<0;});
     return {b:b,items:items,trans:trans,other:other,
       plan:sum(items,function(x){return x.planCost;}),left:sum(items,function(x){return x.leftCost;}),
       spent:sum(exps,function(e){return e.amount;}),transCost:sum(trans,function(e){return e.amount;})};
+  }
+  (function(){try{if(document.getElementById('fx-plan-css'))return;var st=document.createElement('style');st.id='fx-plan-css';st.textContent=
+    '.fxi-plan-rules{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 14px;padding:10px 14px;border:1px solid #d6e1da;border-radius:12px;background:#f7faf8;font-size:13px;line-height:1.45}.fxi-plan-rules small{color:#6c7f73}'+
+    '.fxi-rules{margin-bottom:16px}.fxi-rules table input,.fxi-rules table select{width:100%;min-width:90px;padding:6px 8px;font:inherit;font-size:13px;border:1px solid #cfdcd3;border-radius:8px;background:#fff;box-sizing:border-box}'+
+    '.fxi-rules table input.fxi-num{min-width:80px;text-align:right}.fxi-rules table input.fxi-unit{min-width:70px}.fxi-rules [data-f=label]{min-width:150px}.fxi-rules [data-f=mode]{min-width:165px}.fxi-rules [data-f=category]{min-width:190px}.fxi-rules [data-f=keyword]{min-width:110px}.fxi-rules [data-f=price]{min-width:120px}.fxi-rules td{vertical-align:middle}.fxi-rules .fxi-form-actions+.fxi-form-actions{margin-top:8px}';
+    document.head.appendChild(st);}catch(e){}})();
+  function planEditorHtml(d){
+    var rows=planEdit.map(function(r,i){
+      var std=priceOf(d,r.label);
+      return '<tr data-rule="'+i+'">'+
+        '<td><input type="text" data-f="label" maxlength="60" value="'+esc(r.label)+'" aria-label="Nome"></td>'+
+        '<td><select data-f="mode" aria-label="Como se conta">'+opts([['per100','Por cada 100 pintos'],['perLot','Por lote']],r.mode)+'</select></td>'+
+        '<td><input type="number" data-f="qty" min="0.01" step="0.01" inputmode="decimal" value="'+(r.qty||'')+'" aria-label="Quantidade" class="fxi-num"></td>'+
+        '<td><input type="text" data-f="unit" maxlength="15" value="'+esc(r.unit)+'" aria-label="Unidade" class="fxi-unit"></td>'+
+        '<td><select data-f="category" aria-label="Categoria">'+opts(CATS.map(function(c){return [c,c];}),r.category)+'</select></td>'+
+        '<td><input type="text" data-f="keyword" maxlength="40" value="'+esc(r.keyword)+'" aria-label="Palavra que reconhece as compras"></td>'+
+        '<td><input type="number" data-f="price" min="0.01" step="0.01" inputmode="decimal" value="'+(r.price?String(r.price/100):'')+'" placeholder="'+(std?'padrão '+(std/100).toLocaleString('pt-PT'):'sem preço padrão')+'" aria-label="Preço (MT)" class="fxi-num"></td>'+
+        '<td class="fxi-act"><button type="button" class="fxi-link bad" data-rule-del="'+i+'">Remover</button></td></tr>';
+    }).join('');
+    return '<section class="fxi-form fxi-rules" id="fxi-rules"><h3>Regras da previsão</h3>'+
+      '<p class="fxi-muted">Cada regra diz quanto um lote precisa de comprar. «Palavra» é a parte da descrição que reconhece o que já foi comprado (ex.: «a1» em «Ração A1»). Deixe o preço vazio para usar o preço padrão das despesas.</p>'+
+      '<div class="fxi-scroll"><table><thead><tr><th>Nome</th><th>Como se conta</th><th class="n">Quantidade</th><th>Unidade</th><th>Categoria</th><th>Palavra</th><th class="n">Preço (MT)</th><th></th></tr></thead><tbody>'+
+      (rows||'<tr><td colspan="8" class="fxi-muted">Sem regras. Adicione pelo menos uma.</td></tr>')+'</tbody></table></div>'+
+      '<div class="fxi-form-actions"><button type="button" class="fxi-link" id="fxi-rule-add">+ Adicionar regra</button><button type="button" class="fxi-link" id="fxi-rule-reset">Repor regras originais</button></div>'+
+      '<div class="fxi-form-actions"><button type="button" class="fxi-primary" id="fxi-rule-save">Guardar regras</button><button type="button" class="fxi-link" id="fxi-rule-cancel">Cancelar</button><span class="fxi-muted">As novas regras valem logo para todos os lotes em criação e facturados.</span></div></section>';
+  }
+  function bindPlanEditor(body){
+    var box=body.querySelector('#fxi-rules');if(!box)return;
+    box.addEventListener('input',function(e){
+      var tr=e.target.closest('[data-rule]'),f=e.target.getAttribute('data-f');if(!tr||!f)return;
+      var r=planEdit[+tr.getAttribute('data-rule')],v=e.target.value;
+      if(f==='qty')r.qty=Number(v);else if(f==='price')r.price=v===''?null:Math.round(Number(v)*100);else r[f]=v;
+    });
+    box.addEventListener('change',function(e){var t=e.target;if(t.tagName==='SELECT')t.dispatchEvent(new Event('input',{bubbles:true}));});
+    box.querySelectorAll('[data-rule-del]').forEach(function(b){b.addEventListener('click',function(){planEdit.splice(+b.getAttribute('data-rule-del'),1);render();});});
+    box.querySelector('#fxi-rule-add').addEventListener('click',function(){planEdit.push({id:'r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),label:'',unit:'un.',category:'Outros',mode:'perLot',qty:1,keyword:'',price:null});render();
+      var last=overlay.querySelector('#fxi-rules tbody tr:last-child input');if(last)last.focus();});
+    box.querySelector('#fxi-rule-reset').addEventListener('click',function(){planEdit=JSON.parse(JSON.stringify(DEFAULT_RULES));render();});
+    box.querySelector('#fxi-rule-cancel').addEventListener('click',function(){planEdit=null;render();});
+    box.querySelector('#fxi-rule-save').addEventListener('click',function(){
+      var bt=this;bt.disabled=true;bt.textContent='A guardar…';
+      var rules=planEdit.map(function(r){var x={id:r.id,label:String(r.label||'').trim(),unit:String(r.unit||'').trim(),category:r.category,mode:r.mode,qty:Number(r.qty),keyword:String(r.keyword||'').trim()};if(r.price)x.price=r.price;return x;});
+      planApi({revision:planData.revision,rules:rules}).then(function(j){
+        planData.rules=j.rules;planData.revision=j.revision;planData.updatedAt=j.updatedAt;planData.updatedBy=j.updatedBy;planEdit=null;
+        flash={text:'Regras guardadas. A previsão já usa as novas regras.'};render();
+      }).catch(function(e){
+        flash={text:e.message,bad:true};
+        if(e.status===409){planData.loaded=false;}
+        render();
+      });
+    });
   }
   function canPay(){var a=(lastData&&lastData.access)||role();return a.role==='owner'||((a.permissions&&a.permissions.create)||[]).indexOf('expenses')>=0;}
   function payFormHtml(p){
@@ -506,19 +580,22 @@
   }
   function renderPrevisao(d){
     var lots=d.batches.filter(function(b){return PLAN_STATUS[b.status]&&b.quantity>0;}).sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
-    if(!lots.length)return flashHtml()+'<div class="fxi-empty">Não há lotes em criação nem facturados.</div>';
+    var editor=planEdit?planEditorHtml(d):'';
+    var rulesBar='<div class="fxi-plan-rules"><span><b>Regras:</b> '+(planRules().length?planRules().map(function(r){return esc(r.label)+' — '+esc(ruleText(r));}).join(' · '):'nenhuma')+(planData.updatedAt?' <small>(alteradas a '+esc(when(planData.updatedAt))+(planData.updatedBy?' por '+esc(planData.updatedBy):'')+')</small>':'')+'</span>'+
+      (planData.canEdit&&!planEdit?'<button type="button" class="fxi-primary fxi-sm" id="fxi-rules-edit">Editar regras</button>':'')+'</div>';
+    if(!lots.length)return flashHtml()+rulesBar+editor+'<div class="fxi-empty">Não há lotes em criação nem facturados.</div>';
     var plans=lots.map(function(b){return planFor(d,b);});
-    var noPrice=PLAN.filter(function(it){return !priceOf(d,it.label);}).map(function(it){return it.label;});
+    var noPrice=planRules().filter(function(it){return !rulePrice(d,it);}).map(function(it){return it.label;});
     var pay=canPay();
     var cards=plans.map(function(p){
       var b=p.b;
       var rows=p.items.map(function(x){
         var done=x.left===0;
-        return '<tr><td><b>'+esc(x.it.label)+'</b><small>'+(x.it.per100?x.it.per100+' '+x.it.unit+(x.it.per100>1?'s':'')+' por 100 pintos':x.it.perLot+' '+x.it.unit+' por lote')+'</small></td>'+
+        return '<tr><td><b>'+esc(x.it.label)+'</b><small>'+esc(ruleText(x.it))+'</small></td>'+
           '<td class="n">'+num(x.need,0)+'</td><td class="n">'+(x.bought?num(x.bought,2):'—')+(x.spent?'<small>'+money(x.spent)+'</small>':'')+'</td>'+
           '<td class="n '+(done?'good':'')+'"><b>'+(done?'0':num(x.left,0))+'</b></td><td class="n">'+(x.price?money(x.price):'<span class="bad">sem preço</span>')+'</td><td class="n"><b>'+(done?'—':money(x.leftCost))+'</b></td>'+
           '<td>'+(done?'<span class="fxi-pill s-vendas">Comprado</span>':'<span class="fxi-pill s-revisao">Por comprar</span>')+'</td>'+
-          '<td class="fxi-act">'+(pay&&!done?'<button type="button" class="fxi-primary fxi-sm" data-pay="'+esc(b.id)+'|'+x.it.key+'">Pagar</button>':'')+'</td></tr>';
+          '<td class="fxi-act">'+(pay&&!done?'<button type="button" class="fxi-primary fxi-sm" data-pay="'+esc(b.id)+'|'+esc(x.it.id)+'">Pagar</button>':'')+'</td></tr>';
       }).join('');
       var trows=p.trans.map(function(e){return '<tr class="fxi-manual"><td><b>'+esc(e.description||e.category)+'</b><small>registado manualmente</small></td><td class="n">—</td><td class="n">'+num(e.quantity,2)+'<small>'+day(e.date)+'</small></td><td class="n">—</td><td class="n">'+money(e.unitCost)+'</td><td class="n">'+money(e.amount)+'</td><td><span class="fxi-pill s-vendas">Pago</span></td><td></td></tr>';}).join('');
       var form=payForm&&payForm.batch===b.id?'<tr class="fxi-pay-row"><td colspan="8">'+payFormHtml(payForm)+'</td></tr>':'';
@@ -537,11 +614,11 @@
     }).join('');
     var tot=sum(plans,function(p){return p.left;});
     return flashHtml()+'<div class="fxi-summary">'+stat('Lotes em criação ou facturados',int(lots.length),'',lots.map(function(b){return b.name;}).join(', '))+
-      stat('Total a comprar',money(tot),tot?'warn':'good','ração, carvão e vitamina em falta')+
-      stat('Regra usada','100 pintos','','1 saco A1 + 3 sacos A2; por lote 1 carvão e 1 vitamina')+'</div>'+
+      stat('Total a comprar',money(tot),tot?'warn':'good','insumos em falta segundo as regras')+
+      stat('Regras',int(planRules().length),'',planData.rules===null?'regras originais':'definidas pelo administrador')+'</div>'+rulesBar+editor+
       (noPrice.length?'<div class="fxi-flash bad">Sem preço padrão para: '+esc(noPrice.join(', '))+'. Defina-o nos preços padrão das despesas para a previsão contar com ele.</div>':'')+
       '<div class="fxi-cards fxi-cards1">'+cards+'</div>'+
-      '<p class="fxi-foot">A previsão usa os preços padrão das despesas. "Já comprado" soma as despesas do lote com o mesmo nome (Ração A1, Ração A2, Carvão, Vitamina). Os transportes não entram na previsão: registam-se à mão. Quantidades arredondadas para cima (ex.: 150 pintos = 2 sacos A1).</p>';
+      '<p class="fxi-foot">A previsão usa o preço de cada regra ou, se estiver vazio, o preço padrão das despesas. "Já comprado" soma as despesas do lote cuja descrição tem a palavra da regra. Os transportes não entram na previsão: registam-se à mão. Quantidades por 100 pintos arredondadas para cima (ex.: 150 pintos com 1 saco por 100 = 2 sacos).</p>';
   }
   function saveExpense(rec){
     var body=overlay.querySelector('.fxi-body');body.classList.add('fxi-busy');
@@ -559,7 +636,7 @@
   }
   function bindPrevisao(body,d){
     body.querySelectorAll('[data-pay]').forEach(function(bt){bt.addEventListener('click',function(){
-      var k=bt.dataset.pay.split('|'),b=d.batches.find(function(z){return z.id===k[0];}),x=planFor(d,b).items.find(function(z){return z.it.key===k[1];});
+      var k=bt.dataset.pay.split('|'),b=d.batches.find(function(z){return z.id===k[0];}),x=planFor(d,b).items.find(function(z){return z.it.id===k[1];});
       payForm={batch:b.id,batchName:b.name,title:'Pagar '+x.it.label+' · '+b.name,description:x.it.label,category:x.it.category,unit:x.it.unit,qty:x.left,price:x.price};render();
       var f=overlay.querySelector('#fxi-pay-form');if(f)f.scrollIntoView({behavior:'smooth',block:'center'});
     });});
@@ -656,7 +733,7 @@
     if(!lastData){body.innerHTML='<div class="fxi-empty">A carregar os dados…</div>';return;}
     var d=lastData.state;
     d.customers=d.customers||[];d.payments=d.payments||[];d.production=d.production||[];d.expenses=d.expenses||[];
-    if(view==='previsao'){body.innerHTML=renderPrevisao(d);bindPrevisao(body,d);return;}
+    if(view==='previsao'){if(!planData.loaded&&!planData.loading)fetchPlan();body.innerHTML=renderPrevisao(d);bindPrevisao(body,d);bindPlanEditor(body);var eb=body.querySelector('#fxi-rules-edit');if(eb)eb.addEventListener('click',function(){planEdit=JSON.parse(JSON.stringify(planRules()));render();var r=overlay.querySelector('#fxi-rules');if(r)r.scrollIntoView({behavior:'smooth',block:'start'});});return;}
     if(view==='perdas'){body.innerHTML=renderPerdas(d);bindPerdas(body,d);return;}
     if(view==='fechos'){
       if(!extraData){body.innerHTML='<div class="fxi-empty'+(extraError?' bad':'')+'">'+esc(extraError||'A carregar os dados…')+'</div>';return;}
